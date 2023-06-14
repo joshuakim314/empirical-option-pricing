@@ -7,8 +7,8 @@ import pickle
 import torch
 import torch.utils.data as data
 
-from tcn import TemporalConvNet
-from yield_curve import YieldCurve
+from modules.tcn import TemporalConvNet
+from modules.yield_curve import YieldCurve
 
 
 STANDARD_VOL_SURFACE_DAYS = [10, 14, 30, 60, 91, 122, 152, 182, 273, 365, 547, 730, 1825]

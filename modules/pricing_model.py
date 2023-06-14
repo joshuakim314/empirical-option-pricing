@@ -1,7 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from fairseq.modules import LayerNorm
 
 import pandas as pd
 import numpy as np
@@ -10,25 +8,51 @@ from collections import OrderedDict
 from bisect import bisect
 from pathlib import Path
 
-from modules.tcn import TemporalConvNet
+from modules.tcn import TemporalConvNet, TemporalBlock
 from modules.yield_curve import YieldCurve
 
 
 class PricingModel(nn.Module):
-    def __init__(self, input_size, output_size, num_channels, seq_len, data_len, linear_sizes, kernel_size, tcn_dropout, linear_dropout):
+    def __init__(self, config):
         super().__init__()
-        self.tcn = TemporalConvNet(input_size, num_channels, kernel_size, dropout=tcn_dropout)
-        self.linear = Linears(seq_len + data_len, linear_sizes, output_size, dropout=linear_dropout)
-        self.activation_fn = nn.ReLU()
+        self.config = config
+                
+        self.tcn = TemporalConvNet(
+            num_inputs=self.config.tcn_input_size, 
+            num_channels=self.config.tcn_num_channels, 
+            kernel_size=self.config.tcn_kernel_size, 
+            dropout=self.config.tcn_dropout
+        )
+        self.tcn_pooling = TemporalBlock(
+            n_inputs=self.config.tcn_num_channels[-1],
+            n_outputs=1, 
+            kernel_size=self.config.tcn_kernel_size, 
+            stride=1, 
+            dilation=2**(len(self.config.tcn_num_channels) + 1),
+            padding=(self.config.tcn_kernel_size-1) * 2**(len(self.config.tcn_num_channels) + 1), 
+            dropout=self.config.tcn_dropout
+        )
+        self.layer_norm = nn.LayerNorm(self.config.seq_len)
+        self.linears = Linears(
+            input_size=self.config.seq_len + self.config.tabular_data_size, 
+            hidden_sizes=self.config.linear_sizes, 
+            output_size=self.config.n_targets, 
+            dropout=self.config.linear_dropout
+        )
+        # self.activation_fn = nn.ReLU()
+        self.activation_fn = nn.Sigmoid()
 
     def forward(self, x):
         option_data, ts = x
         # ts needs to have dimension (N, C, L) in order to be passed into TCN
-        tcn_output = torch.squeeze(self.tcn(ts).transpose(1, 2))
-        x = torch.cat((option_data, tcn_output), axis=1)
+        tcn_output = self.tcn(ts)
+        pooled_tcn_output = torch.squeeze(self.tcn_pooling(tcn_output))
+        normalized_output = self.layer_norm(pooled_tcn_output)
+        x = torch.cat((option_data, normalized_output), axis=1)
         for linear in self.linears:
             x = linear(x)
-        return self.activation_fn(torch.squeeze(x))
+        x = self.activation_fn(torch.squeeze(x))
+        return x
 
 
 def Linear(in_features, out_features, bias=True):
